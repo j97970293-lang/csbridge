@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Required so that Aniyomi recognises the APK as an anime extension -->
+    <uses-feature android:name="tachiyomi.animeextension" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <application
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:label="@string/app_name">
+        <!-- Display name of the extension -->
+        <meta-data
+            android:name="aniyomix.name"
+            android:value="@string/extension_name" />
+
+        <!-- Content rating: 0 = safe, 1 = mixed, 2 = NSFW -->
+        <meta-data
+            android:name="aniyomix.contentWarning"
+            android:value="0" />
+
+        <!-- Not a torrent extension (the bridge itself; individual Cloudstream
+             plugins may still return magnet links, they are filtered out) -->
+        <meta-data
+            android:name="aniyomix.torrent"
+            android:value="false" />
+
+        <!-- extensions-lib version this extension is compiled against -->
+        <meta-data
+            android:name="aniyomix.extensionLib"
+            android:value="17" />
+
+        <!-- Entry point: the AnimeSourceFactory. One Aniyomi source is created
+             per installed Cloudstream plugin. -->
+        <meta-data
+            android:name="tachiyomi.animeextension.class"
+            android:value="aniyomi.csbridge.CloudstreamBridgeFactory" />
+    </application>
+
+</manifest>

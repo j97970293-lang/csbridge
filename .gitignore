@@ -1,0 +1,5 @@
+# build cache (téléchargé par tools/build-manual.sh)
+tools/.cache/
+*.idsig
+*.log
+.DS_Store
