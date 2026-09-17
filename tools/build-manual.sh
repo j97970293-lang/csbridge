@@ -205,6 +205,9 @@ mkdir -p "$BUILD/dex"
   "$D/crypto-bigint.jar" "$D/crypto-random.jar" "$D/crypto-provider.jar" "$D/crypto-provider-base.jar" "$D/crypto-asn1.jar" "$D/charset.jar" "$D/fleekio.jar" "$D/gson.jar"
 
 # ------------------------------------------------------------- 5. resources
+VER_NAME="${VER_NAME:-17.1}"
+VER_CODE="${VER_CODE:-1}"
+
 say "Compiling resources (aapt2)"
 rm -rf "$BUILD/res"; mkdir -p "$BUILD/res"
 cp -r "$ROOT"/app/src/main/res/* "$BUILD/res/" && rm -f "$BUILD/res/web_hi_res_512.png"
@@ -214,7 +217,7 @@ sed -e 's|<manifest xmlns:android=|<manifest package="eu.kanade.tachiyomi.animee
   "$ROOT/app/src/main/AndroidManifest.xml" > "$BUILD/AndroidManifest.xml"
 "$AAPT2" link -I "$ANDROID_JAR" --manifest "$BUILD/AndroidManifest.xml" \
   -o "$BUILD/unsigned.apk" --min-sdk-version 26 --target-sdk-version 36 \
-  --version-code 1 --version-name 17.1 --auto-add-overlay "$BUILD/compiled.zip"
+  --version-code "$VER_CODE" --version-name "$VER_NAME" --auto-add-overlay "$BUILD/compiled.zip"
 
 # ---------------------------------------------------------- 6. dex + sign
 say "Packaging"
@@ -245,4 +248,38 @@ fi
 
 say "Done"
 "$JAVA" -jar "$APKSIGNER_JAR" verify --print-certs "$OUT/csbridge.apk" | sed 's/^/    /'
+
+# ------------------------------------------- 7. Aniyomi repository index
+# repo/ can be served as-is (raw.githubusercontent.com works): index.min.json
+# is the catalogue Aniyomi reads, repo/apk/<apk> is what it downloads.
+say "Updating the repository index"
+FINGERPRINT=$("$JAVA" -jar "$APKSIGNER_JAR" verify --print-certs "$OUT/csbridge.apk" \
+  | sed -n 's/.*certificate SHA-256 digest: //p' | head -1 | tr 'A-Z' 'a-z')
+mkdir -p "$ROOT/repo/apk"
+cp "$OUT/csbridge.apk" "$ROOT/repo/apk/csbridge.apk"
+cat > "$ROOT/repo/index.min.json" <<JSON
+[
+  {
+    "name": "Cloudstream Bridge",
+    "pkg": "eu.kanade.tachiyomi.animeextension.all.csbridge",
+    "apk": "csbridge.apk",
+    "lang": "all",
+    "code": $VER_CODE,
+    "version": "$VER_NAME",
+    "nsfw": 0,
+    "sources": [
+      {
+        "name": "Cloudstream Bridge",
+        "lang": "all",
+        "id": "-7830516264863407733",
+        "baseUrl": ""
+      }
+    ]
+  }
+]
+JSON
+echo "$FINGERPRINT" > "$ROOT/repo/signing-fingerprint.txt"
+echo "  fingerprint: $FINGERPRINT"
+echo "  repo/index.min.json: v$VER_NAME (code $VER_CODE)"
+
 ls -lh "$OUT/csbridge.apk"
