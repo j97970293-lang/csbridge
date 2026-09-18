@@ -1,6 +1,8 @@
 package aniyomi.csbridge.ui
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.TypedValue
 import android.view.Gravity
 import android.widget.ScrollView
@@ -13,6 +15,7 @@ import androidx.preference.PreferenceCategory
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
 import aniyomi.csbridge.CsBridge
+import aniyomi.csbridge.CsDiag
 import aniyomi.csbridge.CsLog
 import aniyomi.csbridge.CsPrefs
 import aniyomi.csbridge.CsRepositoryManager
@@ -25,6 +28,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 
 /**
@@ -44,6 +48,7 @@ object CsSettingsScreen {
         screen.removeAll()
 
         sectionSite(context, screen, source)
+        sectionDisplay(context, screen)
         sectionRepositories(context, screen)
         sectionCatalog(context, screen)
         sectionInstalled(context, screen)
@@ -126,6 +131,36 @@ object CsSettingsScreen {
             },
         )
 
+        // Walks the whole chain and says where it stops: providers swallow
+        // their own errors, so "Fiche inaccessible" is impossible to interpret
+        // without it.
+        category.addPreference(
+            Preference(context).apply {
+                title = "▶ Tester ce site"
+                summary = "Catalogue -> fiche -> épisodes -> serveurs, avec la durée et l'erreur exacte"
+                setOnPreferenceClickListener {
+                    val provider = source.providerInstance
+                    if (provider == null) {
+                        summary = "Plugin non chargé : réinstallez-le depuis le catalogue"
+                    } else {
+                        summary = "Test en cours…"
+                        Thread {
+                            val report = runBlocking {
+                                runCatching { CsDiag.run(provider) }.getOrElse {
+                                    "Test interrompu : ${it::class.java.simpleName}: ${it.message}"
+                                }
+                            }
+                            Handler(Looper.getMainLooper()).post {
+                                summary = report.lineSequence().take(2).joinToString(" / ")
+                                showMessage(context, screen, "Test de ${source.name}", report)
+                            }
+                        }.start()
+                    }
+                    true
+                }
+            },
+        )
+
         // Cloudstream plugins can expose their own settings screen.
         val pluginInstance = CsBridge.loadedPluginFor(source.pluginInternalName)?.instance
         if (pluginInstance is Plugin && pluginInstance.openSettings != null) {
@@ -149,6 +184,58 @@ object CsSettingsScreen {
                 },
             )
         }
+    }
+
+    // --------------------------------------------------------------- affichage
+
+    private fun sectionDisplay(context: Context, screen: PreferenceScreen) {
+        val category = PreferenceCategory(context).apply {
+            title = "Fiches, saisons et versions"
+            screen.addPreference(this)
+        }
+
+        category.addPreference(
+            SwitchPreferenceCompat(context).apply {
+                key = "cs_merge_variants"
+                setDefaultValue(CsPrefs.mergeVariants(context))
+                title = "Fusionner VF et VOSTFR"
+                summary = "Une seule entrée par épisode : chaque version devient un serveur. " +
+                    "Désactivez pour voir une entrée par version."
+                isChecked = CsPrefs.mergeVariants(context)
+                setOnPreferenceChangeListener { _, value ->
+                    CsPrefs.setMergeVariants(context, value as Boolean)
+                    true
+                }
+            },
+        )
+
+        category.addPreference(
+            SwitchPreferenceCompat(context).apply {
+                key = "cs_seasons"
+                setDefaultValue(CsPrefs.seasonsEnabled(context))
+                title = "Saisons séparées"
+                summary = "Propose chaque saison comme une fiche distincte quand le site en expose plusieurs."
+                isChecked = CsPrefs.seasonsEnabled(context)
+                setOnPreferenceChangeListener { _, value ->
+                    CsPrefs.setSeasonsEnabled(context, value as Boolean)
+                    true
+                }
+            },
+        )
+
+        category.addPreference(
+            SwitchPreferenceCompat(context).apply {
+                key = "cs_net_log"
+                setDefaultValue(CsPrefs.networkLog(context))
+                title = "Journaliser le réseau"
+                summary = "Trace chaque requête HTTP des plugins (verbeux, utile pour diagnostiquer)."
+                isChecked = CsPrefs.networkLog(context)
+                setOnPreferenceChangeListener { _, value ->
+                    CsPrefs.setNetworkLog(context, value as Boolean)
+                    true
+                }
+            },
+        )
     }
 
     // ------------------------------------------------------------ repositories

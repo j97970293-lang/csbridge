@@ -18,6 +18,7 @@ import aniyomi.csbridge.InstalledPlugin
 import aniyomi.csbridge.PluginManifest
 import aniyomi.csbridge.Repository
 import aniyomi.csbridge.SitePlugin
+import aniyomi.csbridge.source.CsMapping
 import java.io.File
 
 private var passed = 0
@@ -174,6 +175,26 @@ fun main() {
     eq("round trip filePath", record.filePath, back.filePath)
     eq("round trip authors", "someone", back.authors.first())
     ok("round trip enabled default", back.enabled)
+
+    // ------------------------------------------------------------ season urls
+    // A season is a second-class SAnime whose url carries "#cs3season=N".
+    eq(
+        "season url",
+        "https://site.fr/anime/one-piece#cs3season=2",
+        CsMapping.seasonUrl("https://site.fr/anime/one-piece", 2),
+    )
+    eq(
+        "season url (idempotent)",
+        "https://site.fr/anime/one-piece#cs3season=3",
+        CsMapping.seasonUrl(CsMapping.seasonUrl("https://site.fr/anime/one-piece", 2), 3),
+    )
+    eq("season of url", "2", CsMapping.seasonOf("https://site.fr/x#cs3season=2").toString())
+    eq("season of plain url", "null", CsMapping.seasonOf("https://site.fr/x").toString())
+    eq(
+        "base url of a season",
+        "https://site.fr/x",
+        CsMapping.baseUrlOf("https://site.fr/x#cs3season=2"),
+    )
 
     // ---------------------------------------------------------------- report
     println("passed: $passed")

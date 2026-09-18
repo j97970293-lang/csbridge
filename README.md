@@ -21,11 +21,11 @@ Aniyomi  ──►  Cloudstream Bridge  ──►  plugin .cs3 (AnimoFlix, Zenix
 
    | URL | Quand l'utiliser |
    |---|---|
-   | `https://cdn.jsdelivr.net/gh/j97970293-lang/csbridge@v2/repo/index.min.json` | **par défaut** — jsDelivr (CDN) contourne les lenteurs et blocages de `raw.githubusercontent.com` |
+   | `https://cdn.jsdelivr.net/gh/j97970293-lang/csbridge@v3/repo/index.min.json` | **par défaut** — jsDelivr (CDN) contourne les lenteurs et blocages de `raw.githubusercontent.com` |
    | `https://cdn.jsdelivr.net/gh/j97970293-lang/csbridge@main/repo/index.min.json` | même chose, mais le cache de branche peut traîner jusqu'à 12 h après une mise à jour |
    | `https://raw.githubusercontent.com/j97970293-lang/csbridge/main/repo/index.min.json` | si jsDelivr est bloqué chez vous |
 
-   L'URL épinglée sur `@v2` sert toujours exactement la v17.2 ; à chaque nouvelle
+   L'URL épinglée sur `@v2` sert toujours exactement la v17.3 ; à chaque nouvelle
    version, remplacez `@v2` par le nouveau tag (`@v3`, …).
 
 3. **Parcourir → Extensions** → installez **Cloudstream Bridge**.

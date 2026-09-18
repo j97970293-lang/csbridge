@@ -19,6 +19,9 @@ object CsPrefs {
     private const val KEY_UPDATE_ON_START = "update_on_start"
     private const val KEY_ENABLE_ADULT = "enable_adult"
     private const val KEY_LINKS_TIMEOUT = "links_timeout_ms"
+    private const val KEY_MERGE_VARIANTS = "merge_variants"
+    private const val KEY_SEASONS = "seasons_enabled"
+    private const val KEY_NET_LOG = "network_log"
 
     val json = Json {
         ignoreUnknownKeys = true
@@ -100,6 +103,24 @@ object CsPrefs {
 
     fun setLinksTimeoutMs(context: Context, value: Long) =
         prefs(context).edit().putLong(KEY_LINKS_TIMEOUT, value).apply()
+
+    // VF / VOSTFR: one entry per episode (the versions become hosters) or one
+    // entry per version.
+    fun mergeVariants(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_MERGE_VARIANTS, true)
+
+    fun setMergeVariants(context: Context, value: Boolean) =
+        prefs(context).edit().putBoolean(KEY_MERGE_VARIANTS, value).apply()
+
+    fun seasonsEnabled(context: Context): Boolean = prefs(context).getBoolean(KEY_SEASONS, true)
+
+    fun setSeasonsEnabled(context: Context, value: Boolean) =
+        prefs(context).edit().putBoolean(KEY_SEASONS, value).apply()
+
+    fun networkLog(context: Context): Boolean = prefs(context).getBoolean(KEY_NET_LOG, false)
+
+    fun setNetworkLog(context: Context, value: Boolean) =
+        prefs(context).edit().putBoolean(KEY_NET_LOG, value).apply()
 
     // ------------------------------------------------- per provider options
 

@@ -106,7 +106,11 @@ object CsMapping {
 
     // -------------------------------------------------------------- episodes
 
-    fun episodesOf(provider: MainAPI, load: LoadResponse): List<CsEpisode> {
+    fun episodesOf(
+        provider: MainAPI,
+        load: LoadResponse,
+        mergeVariants: Boolean = false,
+    ): List<CsEpisode> {
         val result = LinkedHashMap<String, CsEpisode>()
         fun add(episode: Episode, dubLabel: String?) {
             val data = episode.data
@@ -151,7 +155,48 @@ object CsMapping {
                 null,
             )
         }
-        return result.values.toList()
+        val episodes = result.values.toList()
+        if (!mergeVariants) return episodes
+
+        // One entry per (season, episode): the other language versions become
+        // hosters instead of duplicated episodes.
+        val groups = LinkedHashMap<String, MutableList<CsEpisode>>()
+        episodes.forEach { e ->
+            groups.getOrPut("${e.season ?: 1}|${e.episode ?: 0}") { mutableListOf() }.add(e)
+        }
+        val merged = ArrayList<CsEpisode>(groups.size)
+        groups.values.forEach { group ->
+            val primary = group.first()
+            CsVariants.put(
+                primary.data,
+                group.map { e -> (e.dubLabel?.takeIf { it.isNotBlank() } ?: "Version") to e.data },
+            )
+            merged += if (group.size > 1) primary.copy(dubLabel = null) else primary
+        }
+        return merged
+    }
+
+    // -------------------------------------------------------------- seasons
+
+    /** Seasons are second-class SAnime entries: `url#cs3season=N`. */
+    private const val SEASON_MARKER = "#cs3season="
+
+    fun seasonUrl(url: String, season: Int): String = baseUrlOf(url) + SEASON_MARKER + season
+
+    fun seasonOf(url: String): Int? =
+        url.substringAfter(SEASON_MARKER, "").takeIf { it.isNotBlank() }?.toIntOrNull()
+
+    fun baseUrlOf(url: String): String = url.substringBefore(SEASON_MARKER)
+
+    /** season -> episodes, in the order the provider returned them. */
+    fun seasonsOf(provider: MainAPI, load: LoadResponse): LinkedHashMap<Int, List<CsEpisode>> {
+        val bySeason = LinkedHashMap<Int, MutableList<CsEpisode>>()
+        episodesOf(provider, load).forEach { e ->
+            bySeason.getOrPut(e.season ?: 1) { mutableListOf() }.add(e)
+        }
+        val out = LinkedHashMap<Int, List<CsEpisode>>()
+        bySeason.forEach { (season, list) -> out[season] = list }
+        return out
     }
 
     private fun DubStatus.label(): String = when (this) {
@@ -176,8 +221,11 @@ object CsMapping {
     private fun buildName(e: CsEpisode): String {
         val number = e.episode
         val season = e.season
+        // Always "S<season>E<episode>": the host derives the season from the
+        // name. With a plain "Épisode 5" for season 1, the whole first season
+        // was filed under "Extras" while season 2 showed up correctly.
         val prefix = when {
-            number != null && season != null && season > 1 -> "S${season}E$number"
+            number != null && season != null -> "S${season}E$number"
             number != null -> "Épisode $number"
             season != null -> "Saison $season"
             else -> "Épisode"

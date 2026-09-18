@@ -208,8 +208,8 @@ mkdir -p "$BUILD/dex"
   "$D/jsoup.jar" "$D/re2j.jar"
 
 # ------------------------------------------------------------- 5. resources
-VER_NAME="${VER_NAME:-17.2}"
-VER_CODE="${VER_CODE:-2}"
+VER_NAME="${VER_NAME:-17.3}"
+VER_CODE="${VER_CODE:-3}"
 
 say "Compiling resources (aapt2)"
 rm -rf "$BUILD/res"; mkdir -p "$BUILD/res"

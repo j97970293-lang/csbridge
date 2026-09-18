@@ -6,6 +6,7 @@ import aniyomi.csbridge.CsLog
 import aniyomi.csbridge.CsPrefs
 import aniyomi.csbridge.ui.CsSettingsScreen
 import com.lagradost.cloudstream3.LoadResponse
+import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.MainPageData
 import com.lagradost.cloudstream3.MainPageRequest
@@ -28,6 +29,7 @@ import eu.kanade.tachiyomi.animesource.model.Video
 import kotlinx.coroutines.withTimeoutOrNull
 import java.security.MessageDigest
 import java.util.Collections
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * One Aniyomi source == one Cloudstream provider (one site), like in Cloudstream.
@@ -175,6 +177,83 @@ class CsAnimeSource internal constructor(
 
     // ---------------------------------------------------------------- details
 
+    private data class CachedLoad(val at: Long, val load: LoadResponse)
+
+    private val responseCache = ConcurrentHashMap<String, CachedLoad>()
+
+    /**
+     * `load()` is expensive (some providers fire dozens of requests) and the
+     * host asks for the details, the episodes and the seasons one after the
+     * other: the response is kept for three minutes.
+     */
+    private suspend fun loadCached(api: MainAPI, url: String): LoadResponse? {
+        val key = CsMapping.baseUrlOf(url)
+        responseCache[key]?.let { entry ->
+            if (System.currentTimeMillis() - entry.at < RESPONSE_TTL) return entry.load
+            responseCache.remove(key)
+        }
+        val load = runCatching { api.load(key) }
+            .onFailure { t ->
+                CsLog.w("load($key) failed: ${t::class.java.simpleName}: ${t.message}")
+                probe(api, key)
+            }
+            .getOrNull() ?: return null
+        if (responseCache.size > 24) responseCache.clear()
+        responseCache[key] = CachedLoad(System.currentTimeMillis(), load)
+        return load
+    }
+
+    /**
+     * Providers usually swallow the real cause (`runCatching { app.get(...) }`
+     * then a generic `ErrorLoadingException`). This probe says whether the site
+     * answers at all, and whether Cloudflare stands in the way.
+     */
+    private fun probe(api: MainAPI, url: String) {
+        val target = runCatching { java.net.URI(url) }.getOrNull()
+            ?.let { "${it.scheme}://${it.host}" } ?: api.mainUrl
+        runCatching {
+            val started = System.currentTimeMillis()
+            app.baseClient.newCall(okhttp3.Request.Builder().url(target).head().build())
+                .execute().use { response ->
+                    CsLog.w(
+                        "probe $target -> ${response.code} " +
+                            "(${System.currentTimeMillis() - started} ms, " +
+                            "server=${response.header("Server") ?: "?"})",
+                    )
+                }
+        }.onFailure {
+            CsLog.w("probe $target impossible: ${it::class.java.simpleName}: ${it.message}")
+        }
+    }
+
+    private fun detailsOf(api: MainAPI, load: LoadResponse?, anime: SAnime): SAnime {
+        if (load == null) return anime
+        val updated = CsMapping.toSAnime(api, load, anime)
+        // toSAnime rewrites the url: keep the "#cs3season=" marker, otherwise
+        // the host forgets which season it opened.
+        if (CsMapping.seasonOf(anime.url) != null) updated.url = anime.url
+        return updated
+    }
+
+    private fun seasonsOf(api: MainAPI, load: LoadResponse, anime: SAnime): List<SAnime> {
+        val bySeason = CsMapping.seasonsOf(api, load)
+        if (bySeason.size <= 1) return emptyList()
+        val base = CsMapping.baseUrlOf(anime.url)
+        return bySeason.entries.map { (season, episodes) ->
+            SAnime.create().apply {
+                url = CsMapping.seasonUrl(base, season)
+                title = "Saison $season"
+                thumbnail_url = anime.thumbnail_url
+                description = anime.description
+                author = anime.author
+                artist = anime.artist
+                genre = anime.genre
+                status = anime.status
+                initialized = true
+            }.also { CsLog.i("${api.name}: saison $season (${episodes.size} épisode(s))") }
+        }
+    }
+
     override suspend fun getAnimeEpisodeUpdate(
         anime: SAnime,
         episodes: List<SEpisode>,
@@ -183,11 +262,11 @@ class CsAnimeSource internal constructor(
     ): SAnimeEpisodeUpdate = withProvider { api ->
         if (!fetchDetails && !fetchEpisodes) return@withProvider SAnimeEpisodeUpdate(anime, episodes)
 
-        val load = api.load(anime.url)
+        val load = loadCached(api, anime.url)
             ?: throw Exception("« ${anime.title} » est introuvable sur ${api.name}")
 
-        val updated = if (fetchDetails) CsMapping.toSAnime(api, load, anime) else anime
-        val newEpisodes = if (fetchEpisodes) episodesOf(api, load) else episodes
+        val updated = if (fetchDetails) detailsOf(api, load, anime) else anime
+        val newEpisodes = if (fetchEpisodes) episodesOf(api, load, anime.url) else episodes
         SAnimeEpisodeUpdate(updated, newEpisodes)
     }
 
@@ -197,10 +276,11 @@ class CsAnimeSource internal constructor(
         fetchDetails: Boolean,
         fetchSeasons: Boolean,
     ): SAnimeSeasonUpdate = withProvider { api ->
-        // Cloudstream has no season concept, so there is never a season list.
-        if (!fetchDetails) return@withProvider SAnimeSeasonUpdate(anime, seasons)
-        val load = api.load(anime.url) ?: return@withProvider SAnimeSeasonUpdate(anime, seasons)
-        SAnimeSeasonUpdate(CsMapping.toSAnime(api, load, anime), seasons)
+        if (!fetchDetails && !fetchSeasons) return@withProvider SAnimeSeasonUpdate(anime, seasons)
+        val load = loadCached(api, anime.url)
+        val updated = if (fetchDetails) detailsOf(api, load, anime) else anime
+        val newSeasons = if (fetchSeasons && load != null) seasonsOf(api, load, anime) else seasons
+        SAnimeSeasonUpdate(updated, newSeasons)
     }
 
     override suspend fun getRelatedAnimeList(anime: SAnime): List<AnimeRelation> =
@@ -216,20 +296,48 @@ class CsAnimeSource internal constructor(
             }
         }
 
-    private fun episodesOf(api: MainAPI, load: LoadResponse): List<SEpisode> =
-        CsMapping.episodesOf(api, load).map { CsMapping.toSEpisode(it) }
+    private fun episodesOf(api: MainAPI, load: LoadResponse, url: String): List<SEpisode> {
+        val all = CsMapping.episodesOf(api, load, CsPrefs.mergeVariants(context))
+        val season = CsMapping.seasonOf(url)
+        val filtered = if (season == null) all else all.filter { (it.season ?: 1) == season }
+        CsLog.i(
+            "${api.name}: ${all.size} épisode(s)" +
+                (if (season != null) ", saison $season -> ${filtered.size}" else ""),
+        )
+        return filtered.map { CsMapping.toSEpisode(it) }
+    }
 
     // ---------------------------------------------------------------- servers
 
     override suspend fun getHosterList(episode: SEpisode): List<Hoster> = withProvider { api ->
+        // In "merge" mode one episode carries several versions (VF / VOSTFR):
+        // each of them becomes its own set of hosters.
+        val variants = CsVariants.of(episode.url).ifEmpty { listOf(null to episode.url) }
+        val budget = (CsPrefs.linksTimeoutMs(context) / variants.size).coerceAtLeast(20_000L)
+        val hosters = ArrayList<Hoster>()
+        variants.forEach { (label, data) ->
+            hosters += hostersFor(api, episode, data, label, budget)
+        }
+        if (hosters.isEmpty()) {
+            throw Exception("Aucun serveur n'a été trouvé pour « ${episode.name} »")
+        }
+        hosters
+    }
+
+    private suspend fun hostersFor(
+        api: MainAPI,
+        episode: SEpisode,
+        data: String,
+        label: String?,
+        timeout: Long,
+    ): List<Hoster> {
         val links: MutableList<ExtractorLink> = Collections.synchronizedList(mutableListOf())
         val subtitles: MutableList<SubtitleFile> = Collections.synchronizedList(mutableListOf())
 
-        val timeout = CsPrefs.linksTimeoutMs(context)
         val ok = withTimeoutOrNull(timeout) {
             runCatching {
                 api.loadLinks(
-                    episode.url,
+                    data,
                     false,
                     { sub -> subtitles.add(sub) },
                     { link -> links.add(link) },
@@ -238,14 +346,15 @@ class CsAnimeSource internal constructor(
                 // Logged with the stack trace: without it a provider whose
                 // loadLinks dies (missing extractor, crypto, blocked host) just
                 // looks like "no server" and is impossible to diagnose.
-                CsLog.e("loadLinks failed on ${api.name} for ${episode.name} (data=${episode.url})", t)
+                CsLog.e(
+                    "loadLinks failed on ${api.name} for ${episode.name} (data=$data)",
+                    t,
+                )
             }.getOrNull()
         }
         if (ok == null) CsLog.w("loadLinks timed out after ${timeout}ms on ${api.name}")
         CsLog.i("loadLinks ${api.name}: ${links.size} link(s), ${subtitles.size} subtitle(s)")
-        if (links.isEmpty()) {
-            throw Exception("Aucun serveur n'a été trouvé pour « ${episode.name} »")
-        }
+        if (links.isEmpty()) return emptyList()
 
         val subs = subtitles.toList()
         val playable = links.filter {
@@ -261,7 +370,8 @@ class CsAnimeSource internal constructor(
             grouped.getOrPut(name) { mutableListOf() }.add(link)
         }
 
-        grouped.entries.mapIndexed { index, (serverName, group) ->
+        val suffix = label?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""
+        return grouped.entries.mapIndexed { index, (serverName, group) ->
             val videos = group
                 .sortedByDescending { it.quality }
                 .mapIndexed { i, link ->
@@ -270,10 +380,10 @@ class CsAnimeSource internal constructor(
                     }
                 }
             Hoster(
-                hosterUrl = episode.url,
-                hosterName = if (group.size > 1) "$serverName (${group.size})" else serverName,
+                hosterUrl = data,
+                hosterName = (if (group.size > 1) "$serverName (${group.size})" else serverName) + suffix,
                 videoList = videos,
-                internalData = episode.url,
+                internalData = data,
                 lazy = false,
             )
         }
@@ -325,13 +435,25 @@ class CsAnimeSource internal constructor(
     override fun getFilterList(): AnimeFilterList = AnimeFilterList()
 
     @Suppress("DEPRECATION")
-    override suspend fun getAnimeDetails(anime: SAnime): SAnime = anime
+    override suspend fun getAnimeDetails(anime: SAnime): SAnime = withProvider { api ->
+        detailsOf(api, loadCached(api, anime.url), anime)
+    }
 
     @Suppress("DEPRECATION")
-    override suspend fun getEpisodeList(anime: SAnime): List<SEpisode> = emptyList()
+    override suspend fun getEpisodeList(anime: SAnime): List<SEpisode> = withProvider { api ->
+        val load = loadCached(api, anime.url) ?: return@withProvider emptyList<SEpisode>()
+        episodesOf(api, load, anime.url)
+    }
 
+    // Cloudstream has no season entity, but its episodes carry one: each season
+    // becomes a second-class SAnime, which is exactly what this hook is for.
     @Suppress("DEPRECATION")
-    override suspend fun getSeasonList(anime: SAnime): List<SAnime> = emptyList()
+    override suspend fun getSeasonList(anime: SAnime): List<SAnime> = withProvider { api ->
+        if (!CsPrefs.seasonsEnabled(context)) return@withProvider emptyList<SAnime>()
+        if (CsMapping.seasonOf(anime.url) != null) return@withProvider emptyList<SAnime>()
+        val load = loadCached(api, anime.url) ?: return@withProvider emptyList<SAnime>()
+        seasonsOf(api, load, anime)
+    }
 
     // ------------------------------------------------------------------ legacy
     // RxJava entry points kept abstract by several Aniyomi forks (AniZen,
@@ -379,6 +501,9 @@ class CsAnimeSource internal constructor(
     }
 
     companion object {
+        /** LoadResponse cache lifetime (ms): details, episodes and seasons. */
+        private const val RESPONSE_TTL = 180_000L
+
         private val latestKeywords = listOf(
             "latest", "recent", "newest", "new release", "just added",
             "nouveau", "nouveaut", "récent", "recent", "ajout",

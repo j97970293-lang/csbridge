@@ -75,6 +75,7 @@ object CsBridge {
     fun bootstrap(context: Context): List<AnimeSource> {
         CsContext.set(context)
         CsCrypto.ensure()
+        CsNet.install(context)
         val started = System.currentTimeMillis()
         try {
             initRuntime(context)
