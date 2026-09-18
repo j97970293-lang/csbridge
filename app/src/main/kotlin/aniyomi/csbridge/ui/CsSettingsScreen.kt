@@ -15,6 +15,7 @@ import androidx.preference.PreferenceCategory
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
 import aniyomi.csbridge.CsBridge
+import aniyomi.csbridge.CsCloudflare
 import aniyomi.csbridge.CsDiag
 import aniyomi.csbridge.CsLog
 import aniyomi.csbridge.CsPrefs
@@ -131,6 +132,32 @@ object CsSettingsScreen {
             },
         )
 
+        // Manual Cloudflare: some challenges refuse the headless WebView.
+        category.addPreference(
+            Preference(context).apply {
+                title = "▶ Vérification Cloudflare (manuelle)"
+                summary = "Ouvre le site dans une WebView : résolvez le défi, puis « Terminé »"
+                setOnPreferenceClickListener {
+                    val url = source.mainUrl
+                    if (url.isBlank()) {
+                        Toast.makeText(context, "URL du site inconnue", Toast.LENGTH_SHORT).show()
+                    } else {
+                        runCatching { CsCloudflare.manual(context, url) }
+                            .onFailure {
+                                CsLog.e("Vérification Cloudflare", it)
+                                showMessage(
+                                    context,
+                                    screen,
+                                    "WebView indisponible",
+                                    "${it::class.java.simpleName}: ${it.message}",
+                                )
+                            }
+                    }
+                    true
+                }
+            },
+        )
+
         // Walks the whole chain and says where it stops: providers swallow
         // their own errors, so "Fiche inaccessible" is impossible to interpret
         // without it.
@@ -214,10 +241,23 @@ object CsSettingsScreen {
                 key = "cs_seasons"
                 setDefaultValue(CsPrefs.seasonsEnabled(context))
                 title = "Saisons séparées"
-                summary = "Propose chaque saison comme une fiche distincte quand le site en expose plusieurs."
+                summary = "Une fiche par saison. Désactivé (défaut) : tout est regroupé dans une seule " +
+                    "fiche — les épisodes restent nommés S1E3, S2E7…"
                 isChecked = CsPrefs.seasonsEnabled(context)
                 setOnPreferenceChangeListener { _, value ->
                     CsPrefs.setSeasonsEnabled(context, value as Boolean)
+                    true
+                }
+            },
+        )
+
+        category.addPreference(
+            Preference(context).apply {
+                title = "Cookies Cloudflare : effacer"
+                summary = "Oublie les jetons de contournement enregistrés (à refaire si un site reste bloqué)"
+                setOnPreferenceClickListener {
+                    com.lagradost.cloudstream3.network.CloudflareKiller.forgetAll()
+                    Toast.makeText(context, "Cookies Cloudflare effacés", Toast.LENGTH_SHORT).show()
                     true
                 }
             },

@@ -8,6 +8,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import aniyomi.csbridge.CsContext
+import aniyomi.csbridge.CsCookies
 import aniyomi.csbridge.CsLog
 import com.lagradost.cloudstream3.app
 import com.lagradost.nicehttp.Requests.Companion.await
@@ -17,6 +18,7 @@ import okhttp3.Interceptor
 import okhttp3.Request
 import okhttp3.Response
 import java.net.URI
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -31,15 +33,16 @@ import java.util.concurrent.TimeUnit
  * broken search, no server".
  *
  * This is a faithful re-implementation: it is a plain okhttp [Interceptor] that
- * retries a 403/503 coming from a Cloudflare edge after solving the challenge
- * in a real [WebView] and harvesting the `cf_clearance` cookie.
+ * retries a 403/503 after solving the challenge in a [WebView] and harvesting
+ * the `cf_clearance` cookie. The cookie is shared by every instance and kept on
+ * disk for a few hours, so the WebView is only needed once.
  */
 class CloudflareKiller : Interceptor {
 
     companion object {
         private const val TAG = "CloudflareKiller"
         private val ERROR_CODES = listOf(403, 503)
-        private val CLOUDFLARE_SERVERS = listOf("cloudflare-nginx", "cloudflare")
+        private const val MAX_ATTEMPTS_PER_HOST = 2
 
         /**
          * Plain Chrome UA: the default WebView UA carries a `; wv` marker that
@@ -55,6 +58,13 @@ class CloudflareKiller : Interceptor {
         @Volatile
         var webViewTimeoutMs: Long = 45_000L
 
+        /** One clearance cookie per host, shared by every plugin instance. */
+        private val sharedCookies = ConcurrentHashMap<String, Map<String, String>>()
+        private val attempts = ConcurrentHashMap<String, Int>()
+        private var persisted = false
+
+        fun cookieMap(): MutableMap<String, Map<String, String>> = sharedCookies
+
         fun parseCookieMap(cookie: String): Map<String, String> =
             cookie.split(";").mapNotNull { part ->
                 val split = part.split("=", limit = 2)
@@ -62,43 +72,89 @@ class CloudflareKiller : Interceptor {
                 val value = split.getOrNull(1)?.trim().orEmpty()
                 if (key.isBlank() || value.isBlank()) null else key to value
             }.toMap()
+
+        /** Called after a manual solve (see CsCloudflare) or a WebView pass. */
+        fun remember(host: String, cookies: Map<String, String>) {
+            if (cookies.isEmpty()) return
+            sharedCookies[host] = cookies
+            runCatching { CsCookies.save(CsContext.get(), host, cookies) }
+        }
+
+        fun forgetAll() {
+            sharedCookies.clear()
+            attempts.clear()
+            runCatching { CsCookies.clear(CsContext.get()) }
+        }
+
+        private fun loadPersisted() {
+            if (persisted) return
+            persisted = true
+            runCatching {
+                CsCookies.load(CsContext.get()).forEach { (host, cookies) ->
+                    sharedCookies.putIfAbsent(host, cookies)
+                }
+            }.onFailure { CsLog.w("$TAG: cookies persistés illisibles: ${it.message}") }
+        }
     }
 
-    /** host -> cookies, so the WebView is only used once per domain. */
-    val savedCookies: MutableMap<String, Map<String, String>> = mutableMapOf()
+    init {
+        loadPersisted()
+    }
+
+    /** host -> cookies, shared with every other instance. */
+    val savedCookies: MutableMap<String, Map<String, String>> get() = sharedCookies
 
     /** Headers (cookies + WebView UA) for a manual request to [url]. */
     fun getCookieHeaders(url: String): Headers {
         val host = runCatching { URI(url).host }.getOrNull().orEmpty()
-        return cfHeaders(mapOf("user-agent" to WEBVIEW_UA), savedCookies[host] ?: emptyMap())
+        return cfHeaders(mapOf("user-agent" to WEBVIEW_UA), sharedCookies[host] ?: emptyMap())
     }
 
     override fun intercept(chain: Interceptor.Chain): Response = runBlocking {
         val request = chain.request()
         val host = request.url.host
 
-        savedCookies[host]?.let { return@runBlocking proceed(request, it) }
+        sharedCookies[host]?.let { return@runBlocking proceed(request, it) }
 
         val response = chain.proceed(request)
-        if (!isCloudflareError(response)) return@runBlocking response
+        if (!looksLikeCloudflare(response)) return@runBlocking response
 
+        // Only a couple of attempts per host: a site that is simply down must
+        // not stall every request behind a 45 s WebView.
+        val used = attempts.getOrPut(host) { 0 }
+        if (used >= MAX_ATTEMPTS_PER_HOST) {
+            CsLog.w("$TAG: $host refuses after $used attempts, giving up")
+            return@runBlocking response
+        }
+        attempts[host] = used + 1
         response.close()
-        CsLog.i("$TAG: Cloudflare challenge on ${request.url} -> solving with WebView")
+
+        CsLog.i("$TAG: challenge Cloudflare sur ${request.url} -> WebView")
         if (solveWithWebView(request.url.toString())) {
-            val cookies = savedCookies[host]
+            val cookies = sharedCookies[host]
             if (cookies != null) {
-                CsLog.i("$TAG: solved ${request.url}")
+                CsLog.i("$TAG: $host résolu (${cookies.size} cookie(s))")
                 return@runBlocking proceed(request, cookies)
             }
         }
-        CsLog.w("$TAG: could not solve ${request.url}")
+        CsLog.w("$TAG: $host non résolu")
         chain.proceed(request)
     }
 
     // ------------------------------------------------------------------ http
 
-    private fun isCloudflareError(response: Response): Boolean =
-        response.header("Server") in CLOUDFLARE_SERVERS && response.code in ERROR_CODES
+    /**
+     * A HEAD often answers 200 while the GET is challenged, and some edges do
+     * not advertise themselves: any 403/503 is worth one attempt.
+     */
+    private fun looksLikeCloudflare(response: Response): Boolean {
+        if (response.code !in ERROR_CODES) return false
+        val server = response.header("Server")?.lowercase().orEmpty()
+        return server.contains("cloudflare") ||
+            response.header("cf-mitigated") != null ||
+            response.header("cf-ray") != null ||
+            server.isBlank()
+    }
 
     private suspend fun proceed(request: Request, cookies: Map<String, String>): Response =
         app.baseClient.newCall(
@@ -111,7 +167,7 @@ class CloudflareKiller : Interceptor {
         val builder = Headers.Builder()
         headers.forEach { (k, v) -> builder.add(k, v) }
         if (cookies.isNotEmpty()) {
-            builder.removeAll("Cookie")
+            builder.removeAll("cookie")
             builder.add("Cookie", cookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
         }
         return builder.build()
@@ -122,12 +178,7 @@ class CloudflareKiller : Interceptor {
     private fun clearanceCookie(url: String): String? =
         runCatching {
             CookieManager.getInstance()?.getCookie(url)?.takeIf { it.contains("cf_clearance") }
-        }.onFailure { CsLog.w("$TAG: CookieManager error: ${it.message}") }.getOrNull()
-
-    private fun remember(url: String, cookie: String) {
-        val host = runCatching { URI(url).host }.getOrNull() ?: return
-        savedCookies[host] = parseCookieMap(cookie)
-    }
+        }.onFailure { CsLog.w("$TAG: CookieManager: ${it.message}") }.getOrNull()
 
     /**
      * Loads the page in a background [WebView] until `cf_clearance` shows up in
@@ -136,7 +187,7 @@ class CloudflareKiller : Interceptor {
      */
     private fun solveWithWebView(url: String): Boolean {
         if (Looper.myLooper() == Looper.getMainLooper()) {
-            CsLog.w("$TAG: called on the main thread, skipping the WebView")
+            CsLog.w("$TAG: appelé sur le thread principal, WebView ignoré")
             return false
         }
 
@@ -148,7 +199,7 @@ class CloudflareKiller : Interceptor {
             val view = try {
                 WebView(CsContext.get())
             } catch (t: Throwable) {
-                CsLog.w("$TAG: WebView unavailable: ${t.message}")
+                CsLog.w("$TAG: WebView indisponible: ${t.message}")
                 created.countDown()
                 destroyed.countDown()
                 return@post
@@ -170,14 +221,14 @@ class CloudflareKiller : Interceptor {
                 view.webViewClient = WebViewClient()
                 view.loadUrl(url)
             } catch (t: Throwable) {
-                CsLog.w("$TAG: WebView setup failed: ${t.message}")
+                CsLog.w("$TAG: WebView: ${t.message}")
             } finally {
                 created.countDown()
             }
         }
 
         if (!created.await(15, TimeUnit.SECONDS)) {
-            CsLog.w("$TAG: the WebView never started")
+            CsLog.w("$TAG: la WebView n'a pas démarré")
             return false
         }
 
@@ -186,7 +237,8 @@ class CloudflareKiller : Interceptor {
         while (System.currentTimeMillis() < deadline) {
             val cookie = clearanceCookie(url)
             if (cookie != null) {
-                remember(url, cookie)
+                val host = runCatching { URI(url).host }.getOrNull()
+                if (host != null) remember(host, parseCookieMap(cookie))
                 solved = true
                 break
             }
@@ -201,12 +253,12 @@ class CloudflareKiller : Interceptor {
                     destroy()
                 }
             } catch (t: Throwable) {
-                CsLog.w("$TAG: WebView cleanup failed: ${t.message}")
+                CsLog.w("$TAG: nettoyage WebView: ${t.message}")
             } finally {
                 destroyed.countDown()
             }
         }
- destroyed.await(5, TimeUnit.SECONDS)
+        destroyed.await(5, TimeUnit.SECONDS)
         return solved
     }
 }

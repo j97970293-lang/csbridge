@@ -21,11 +21,11 @@ Aniyomi  ──►  Cloudstream Bridge  ──►  plugin .cs3 (AnimoFlix, Zenix
 
    | URL | Quand l'utiliser |
    |---|---|
-   | `https://cdn.jsdelivr.net/gh/j97970293-lang/csbridge@v3/repo/index.min.json` | **par défaut** — jsDelivr (CDN) contourne les lenteurs et blocages de `raw.githubusercontent.com` |
+   | `https://cdn.jsdelivr.net/gh/j97970293-lang/csbridge@v4/repo/index.min.json` | **par défaut** — jsDelivr (CDN) contourne les lenteurs et blocages de `raw.githubusercontent.com` |
    | `https://cdn.jsdelivr.net/gh/j97970293-lang/csbridge@main/repo/index.min.json` | même chose, mais le cache de branche peut traîner jusqu'à 12 h après une mise à jour |
    | `https://raw.githubusercontent.com/j97970293-lang/csbridge/main/repo/index.min.json` | si jsDelivr est bloqué chez vous |
 
-   L'URL épinglée sur `@v2` sert toujours exactement la v17.3 ; à chaque nouvelle
+   L'URL épinglée sur `@v2` sert toujours exactement la v17.4 ; à chaque nouvelle
    version, remplacez `@v2` par le nouveau tag (`@v3`, …).
 
 3. **Parcourir → Extensions** → installez **Cloudstream Bridge**.
@@ -108,6 +108,8 @@ bash tools/run-tests.sh                         # tests logiques
 | Catalogue vide, recherche cassée, aucun serveur | `com.lagradost.cloudstream3.network.CloudflareKiller` n'existe que dans le module *app* de Cloudstream, jamais dans `library-android`. Le pont fournit sa propre implémentation (résolution Cloudflare par WebView). |
 | `NoClassDefFoundError: org.jsoup…` | jsoup était compilé mais pas dexé — corrigé, avec `re2j` pour les expressions régulières. |
 | Dépôt injoignable | Utilisez l'URL jsDelivr ci-dessus plutôt que `raw.githubusercontent.com`. |
+| Catalogue vide mais `HEAD` répond 200 | Cloudflare bloque le `GET` (le `HEAD` passe). Le pont ouvre une WebView invisible ; sinon utilisez **▶ Vérification Cloudflare (manuelle)** dans les réglages du site. |
+| Trop de saisons | Les plugins créent une saison par panneau (Films, OAV, VF…). « Saisons séparées » est désactivé par défaut : tout est regroupé dans une fiche, les épisodes restent nommés `S1E3`. |
 
 Le journal se lit dans ⚙️ → **Diagnostic → Voir le journal**.
 

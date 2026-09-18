@@ -1,5 +1,8 @@
 package aniyomi.csbridge
 
+import aniyomi.csbridge.CsContext
+import aniyomi.csbridge.CsPrefs
+
 import aniyomi.csbridge.source.CsMapping
 import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.fixUrl
@@ -23,6 +26,19 @@ import java.util.Collections
 object CsDiag {
 
     suspend fun run(api: MainAPI, stepTimeoutMs: Long = 45_000L): String {
+        // The journal is forced on for the duration of the test: it shows the
+        // exact HTTP status of every request the provider makes.
+        val context = runCatching { CsContext.get() }.getOrNull()
+        val previousLog = context?.let { CsPrefs.networkLog(it) } ?: false
+        if (context != null && !previousLog) CsPrefs.setNetworkLog(context, true)
+        return try {
+            runInternal(api, stepTimeoutMs)
+        } finally {
+            if (context != null && !previousLog) CsPrefs.setNetworkLog(context, false)
+        }
+    }
+
+    private suspend fun runInternal(api: MainAPI, stepTimeoutMs: Long): String {
         val out = StringBuilder()
         fun say(line: String) {
             out.appendLine(line)
@@ -40,20 +56,35 @@ object CsDiag {
         }
         say("1) catégories : ${pages.size}")
 
-        val items: List<SearchResponse> = withTimeoutOrNull(stepTimeoutMs) {
+        val items: List<SearchResponse> = withTimeoutOrNull(stepTimeoutMs * 3) {
             try {
                 if (pages.isEmpty()) {
                     say("   aucune page d'accueil -> recherche de secours")
                     val results: List<SearchResponse> = api.search("a") ?: emptyList()
                     results
                 } else {
-                    val first = pages.first()
-                    val page = api.getMainPage(
-                        1,
-                        MainPageRequest(first.name, first.data, first.horizontalImages),
-                    )
+                    // Every category: the first one is often not the one that
+                    // carries the actual list.
                     val list = ArrayList<SearchResponse>()
-                    page?.items?.forEach { home -> list.addAll(home.list) }
+                    pages.forEach { data ->
+                        val found = ArrayList<SearchResponse>()
+                        val failure = try {
+                            val page = api.getMainPage(
+                                1,
+                                MainPageRequest(data.name, data.data, data.horizontalImages),
+                            )
+                            page?.items?.forEach { home -> found.addAll(home.list) }
+                            null
+                        } catch (t: Throwable) {
+                            t
+                        }
+                        val label = data.name.ifBlank { "(accueil)" }
+                        say(
+                            "   - $label : ${found.size}" +
+                                (failure?.let { " — ${it::class.java.simpleName}: ${it.message}" } ?: ""),
+                        )
+                        list.addAll(found)
+                    }
                     list
                 }
             } catch (t: Throwable) {

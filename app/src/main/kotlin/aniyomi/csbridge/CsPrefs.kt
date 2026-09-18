@@ -29,7 +29,7 @@ object CsPrefs {
         explicitNulls = false
     }
 
-    private fun prefs(context: Context) =
+    internal fun prefs(context: Context) =
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
     // ---------------------------------------------------------------- repos
@@ -112,7 +112,10 @@ object CsPrefs {
     fun setMergeVariants(context: Context, value: Boolean) =
         prefs(context).edit().putBoolean(KEY_MERGE_VARIANTS, value).apply()
 
-    fun seasonsEnabled(context: Context): Boolean = prefs(context).getBoolean(KEY_SEASONS, true)
+    // Off by default: providers invent a season per panel (Films, OAV,
+    // hors-série, VF…), which multiplies the cards. The episode names still
+    // carry "S<season>E<episode>", so a flat list stays readable.
+    fun seasonsEnabled(context: Context): Boolean = prefs(context).getBoolean(KEY_SEASONS, false)
 
     fun setSeasonsEnabled(context: Context, value: Boolean) =
         prefs(context).edit().putBoolean(KEY_SEASONS, value).apply()
