@@ -17,9 +17,17 @@ Aniyomi  ──►  Cloudstream Bridge  ──►  plugin .cs3 (AnimoFlix, Zenix
 ### Méthode 1 — via un dépôt Aniyomi (recommandé)
 
 1. Aniyomi / AniZen → **Paramètres → Parcourir → Dépôts d'extensions** (ou *Repos*).
-2. Ajoutez :
-   `https://raw.githubusercontent.com/<votre-compte>/csbridge/main/repo/index.min.json`
+2. Ajoutez l'une de ces URL :
+
+   | URL | Quand l'utiliser |
+   |---|---|
+   | `https://cdn.jsdelivr.net/gh/j97970293-lang/csbridge@main/repo/index.min.json` | **par défaut** — jsDelivr met le dépôt en cache et contourne les lenteurs ou blocages de `raw.githubusercontent.com` |
+   | `https://raw.githubusercontent.com/j97970293-lang/csbridge/main/repo/index.min.json` | si jsDelivr est bloqué chez vous |
+
 3. **Parcourir → Extensions** → installez **Cloudstream Bridge**.
+
+Les deux servent exactement les deux mêmes fichiers : `repo/index.min.json` (le catalogue)
+et `repo/apk/csbridge.apk` (l'extension).
 
 ### Méthode 2 — APK direct
 
@@ -87,6 +95,17 @@ bash tools/run-tests.sh                         # tests logiques
 
 `.github/workflows/release.yml` construit l'APK et publie une *Release* à chaque tag
 `v*`. Le fichier `repo/index.min.json` est le catalogue Aniyomi servi en brut par GitHub.
+
+## Dépannage
+
+| Symptôme | Cause / solution |
+|---|---|
+| Un seul site apparaît, les autres sont vides | Le fournisseur de cryptographie manquait (réglé) : les plugins qui appellent `registerExtractorAPI()` mouraient au chargement. Vérifiez `extractor APIs registered:` dans le journal. |
+| Catalogue vide, recherche cassée, aucun serveur | `com.lagradost.cloudstream3.network.CloudflareKiller` n'existe que dans le module *app* de Cloudstream, jamais dans `library-android`. Le pont fournit sa propre implémentation (résolution Cloudflare par WebView). |
+| `NoClassDefFoundError: org.jsoup…` | jsoup était compilé mais pas dexé — corrigé, avec `re2j` pour les expressions régulières. |
+| Dépôt injoignable | Utilisez l'URL jsDelivr ci-dessus plutôt que `raw.githubusercontent.com`. |
+
+Le journal se lit dans ⚙️ → **Diagnostic → Voir le journal**.
 
 ## Licence
 

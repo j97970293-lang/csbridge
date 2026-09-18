@@ -52,6 +52,7 @@ KNOWN_OPTIONAL = (
     # BouncyCastle and to its own PEM/ASN.1 modules for exotic curves
     # (Ed25519/Ed448/X448). Cloudstream extractors only use AES/RC4 with raw
     # keys, so these paths are guarded and never reached here.
+    "org/jspecify/",                 # jsoup build-time annotations (not retained at runtime)
     "org/bouncycastle/",
     "dev/whyoleg/cryptography/serialization/",
                                     # (only referenced: the legacy fetch* entry

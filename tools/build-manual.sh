@@ -118,6 +118,8 @@ get "$MVN/org/jetbrains/kotlin/kotlin-reflect/2.3.20/kotlin-reflect-2.3.20.jar" 
 get "$MVN/me/xdrop/fuzzywuzzy/1.4.0/fuzzywuzzy-1.4.0.jar"                          "$D/fuzzywuzzy.jar"
 # gson is used by the built-in Dailymotion / GDMirrorbot / Voe extractors
 get "$MVN/com/google/code/gson/gson/2.11.0/gson-2.11.0.jar"                            "$D/gson.jar"
+# jsoup uses re2j when it is on the classpath (faster regex on Android)
+get "$MVN/com/google/re2j/re2j/1.7/re2j-1.7.jar"                                        "$D/re2j.jar"
 get "$MVN/io/ktor/ktor-io-jvm/3.5.0/ktor-io-jvm-3.5.0.jar"                               "$D/ktor-io.jar"
 get "$MVN/co/touchlab/stately-concurrency-jvm/2.1.0/stately-concurrency-jvm-2.1.0.jar"   "$D/stately-concurrency.jar"
 get "$MVN/co/touchlab/stately-common-jvm/2.1.0/stately-common-jvm-2.1.0.jar"             "$D/stately-common.jar"
@@ -202,11 +204,12 @@ mkdir -p "$BUILD/dex"
   "$D/kio.jar" "$D/bytestring.jar" "$D/atomicfu.jar" "$D/crypto-core.jar" "$D/crypto-opt.jar" \
   "$D/kotlin-reflect.jar" "$D/fuzzywuzzy.jar" "$D/ksoup.jar" \
   "$D/ktor-io.jar" "$D/stately-concurrency.jar" "$D/stately-common.jar" \
-  "$D/crypto-bigint.jar" "$D/crypto-random.jar" "$D/crypto-provider.jar" "$D/crypto-provider-base.jar" "$D/crypto-asn1.jar" "$D/charset.jar" "$D/fleekio.jar" "$D/gson.jar"
+  "$D/crypto-bigint.jar" "$D/crypto-random.jar" "$D/crypto-provider.jar" "$D/crypto-provider-base.jar" "$D/crypto-asn1.jar" "$D/charset.jar" "$D/fleekio.jar" "$D/gson.jar" \
+  "$D/jsoup.jar" "$D/re2j.jar"
 
 # ------------------------------------------------------------- 5. resources
-VER_NAME="${VER_NAME:-17.1}"
-VER_CODE="${VER_CODE:-1}"
+VER_NAME="${VER_NAME:-17.2}"
+VER_CODE="${VER_CODE:-2}"
 
 say "Compiling resources (aapt2)"
 rm -rf "$BUILD/res"; mkdir -p "$BUILD/res"
